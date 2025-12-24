@@ -38,49 +38,93 @@ local openContextMenu = nil
 ---@field canClose? boolean
 ---@field options { [string]: ContextMenuItem } | ContextMenuArrayItem[]
 
+local useLation = GetResourceState("lation_ui") == "started"
+
 local function closeContext(_, cb, onExit)
-    if cb then cb(1) end
+    if useLation then
+        if not openContextMenu then return end
+        exports.lation_ui:hideMenu()
+    else
+        if cb then cb(1) end
+        lib.resetNuiFocus()
 
-    lib.resetNuiFocus()
+        if not openContextMenu then return end
 
-    if not openContextMenu then return end
+        if (cb or onExit) and contextMenus[openContextMenu].onExit then
+            contextMenus[openContextMenu].onExit()
+        end
 
-    if (cb or onExit) and contextMenus[openContextMenu].onExit then contextMenus[openContextMenu].onExit() end
-
-    if not cb then SendNUIMessage({ action = 'hideContext' }) end
+        if not cb then
+            SendNUIMessage({ action = 'hideContext' })
+        end
+    end
 
     openContextMenu = nil
 end
 
 ---@param id string
 function lib.showContext(id)
-    if not contextMenus[id] then error('No context menu of such id found.') end
+    if type(id) == "table" and id.id then
+        id = id.id
+    end
 
-    local data = contextMenus[id]
+    if type(id) ~= "string" then
+        error(("Invalid menu ID passed to showContext: expected string, got %s"):format(type(id)))
+    end
+
+    local menu = contextMenus[id]
+    if not menu then
+        error(('No context menu found for id: %s'):format(id))
+    end
+
     openContextMenu = id
 
-    lib.setNuiFocus(false)
-
-    SendNuiMessage(json.encode({
-        action = 'showContext',
-        data = {
-            title = data.title,
-            canClose = data.canClose,
-            menu = data.menu,
-            options = data.options
-        }
-    }, { sort_keys = true }))
+    if useLation then
+        exports.lation_ui:showMenu(id)
+    else
+        lib.setNuiFocus(false)
+        SendNuiMessage(json.encode({
+            action = 'showContext',
+            data = {
+                title = menu.title,
+                canClose = menu.canClose,
+                menu = menu.menu,
+                options = menu.options
+            }
+        }, { sort_keys = true }))
+    end
 end
 
 ---@param context ContextMenuProps | ContextMenuProps[]
 function lib.registerContext(context)
     for k, v in pairs(context) do
-        if type(k) == 'number' then
-            contextMenus[v.id] = v
-        else
-            contextMenus[context.id] = context
-            break
+        local menu = type(k) == 'number' and v or context
+
+        if not menu.id then
+            error('Menu must have an ID')
         end
+
+        contextMenus[menu.id] = menu
+
+        if useLation and menu.options then
+            for _, item in ipairs(menu.options) do
+                if item.icon and type(item.icon) == 'string' and item.icon:find("^fa%-solid%s") then
+                    item.icon = item.icon:gsub("^fa%-solid%s*", "fas ")
+                end
+            end
+
+            exports.lation_ui:registerMenu({
+                id = menu.id,
+                title = menu.title or '',
+                subtitle = menu.subtitle or '',
+                canClose = menu.canClose ~= false,
+                position = menu.position or "offcenter-right",
+                onExit = type(menu.onExit) == 'function' and menu.onExit or nil,
+                options = menu.options
+            })
+        end
+
+        if type(k) ~= 'number' then break end
     end
 end
 
@@ -111,8 +155,10 @@ RegisterNUICallback('clickContext', function(id, cb)
 
     openContextMenu = nil
 
-    SendNUIMessage({ action = 'hideContext' })
-    lib.resetNuiFocus()
+    if not useLation then
+        SendNUIMessage({ action = 'hideContext' })
+        lib.resetNuiFocus()
+    end
 
     if data.onSelect then data.onSelect(data.args) end
     if data.event then TriggerEvent(data.event, data.args) end
@@ -120,6 +166,3 @@ RegisterNUICallback('clickContext', function(id, cb)
 end)
 
 RegisterNUICallback('closeContext', closeContext)
-
-
-
