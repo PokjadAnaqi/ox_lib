@@ -8,6 +8,8 @@
 
 local input
 
+local useLation = GetResourceState("lation_ui") == "started"
+
 ---@class InputDialogRowProps
 ---@field type 'input' | 'number' | 'checkbox' | 'select' | 'slider' | 'multi-select' | 'date' | 'date-range' | 'time' | 'textarea' | 'color'
 ---@field label string
@@ -45,27 +47,53 @@ function lib.inputDialog(heading, rows, options)
     if input then return end
     input = promise.new()
 
-    -- Backwards compat with string tables
     for i = 1, #rows do
         if type(rows[i]) == 'string' then
             rows[i] = { type = 'input', label = rows[i] --[[@as string]] }
         end
     end
 
-    lib.setNuiFocus(false)
-    SendNUIMessage({
-        action = 'openDialog',
-        data = {
-            heading = heading,
-            rows = rows,
-            options = options
+    if useLation then
+        local lationData = {
+            title = heading,
+            options = rows
         }
-    })
-
-    return Citizen.Await(input)
+        
+        if options then
+            if options.allowCancel ~= nil then
+                lationData.cancelText = options.allowCancel and "Cancel" or nil
+            end
+            if options.size then
+                lationData.size = options.size
+            end
+        end
+        
+        local result = exports.lation_ui:input(lationData)
+        local promise = input
+        input = nil
+        promise:resolve(result)
+        return result
+    else
+        lib.setNuiFocus(false)
+        SendNUIMessage({
+            action = 'openDialog',
+            data = {
+                heading = heading,
+                rows = rows,
+                options = options
+            }
+        })
+        
+        return Citizen.Await(input)
+    end
 end
 
 function lib.closeInputDialog()
+    if useLation then
+        -- lation_ui handles closing internally
+        return
+    end
+
     if not input then return end
 
     lib.resetNuiFocus()
@@ -79,7 +107,10 @@ end
 
 RegisterNUICallback('inputData', function(data, cb)
     cb(1)
-    lib.resetNuiFocus()
+    
+    if not useLation then
+        lib.resetNuiFocus()
+    end
 
     local promise = input
     input = nil
