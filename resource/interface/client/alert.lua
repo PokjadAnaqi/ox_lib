@@ -10,6 +10,8 @@
 local alert = nil
 local alertId = 0
 
+local useLation = GetResourceState("lation_ui") == "started"
+
 ---@class AlertDialogProps
 ---@field header string;
 ---@field content string;
@@ -29,6 +31,14 @@ function lib.alertDialog(data, timeout)
     alertId = id
     alert = promise.new()
 
+    if useLation then
+        local result = exports.lation_ui:alert(data, timeout)
+        local p = alert
+        alert = nil
+        p:resolve(result)
+        return result
+    end
+
     lib.setNuiFocus(false)
     SendNUIMessage({
         action = 'sendAlert',
@@ -46,6 +56,11 @@ end
 
 ---@param reason? string An optional reason for the window to be closed.
 function lib.closeAlertDialog(reason)
+    if useLation then
+        -- lation_ui handles closing internally
+        return
+    end
+
     if not alert then return end
 
     lib.resetNuiFocus()
@@ -61,7 +76,10 @@ end
 
 RegisterNUICallback('closeAlert', function(data, cb)
     cb(1)
-    lib.resetNuiFocus()
+    
+    if not useLation then
+        lib.resetNuiFocus()
+    end
 
     local promise = alert --[[@as promise]]
     alert = nil
