@@ -12,6 +12,8 @@ local DisablePlayerFiring = DisablePlayerFiring
 local playerState = LocalPlayer.state
 local createdProps = {}
 
+local useLation = GetResourceState("lation_ui") == "started"
+
 ---@class ProgressPropProps
 ---@field model string
 ---@field bone? number
@@ -143,17 +145,19 @@ local function startProgress(data)
     if anim then
         if anim.dict then
             StopAnimTask(cache.ped, anim.dict, anim.clip, 1.0)
-            Wait(0) -- This is needed here otherwise the StopAnimTask is cancelled
+            Wait(0)
         else
             ClearPedTasks(cache.ped)
         end
     end
 
     playerState.invBusy = false
-    local duration = progress ~= false and GetGameTimer() - startTime + 100 -- give slight leeway
+    local duration = progress ~= false and GetGameTimer() - startTime + 100
 
     if progress == false or duration <= data.duration then
-        SendNUIMessage({ action = 'progressCancel' })
+        if not useLation then
+            SendNUIMessage({ action = 'progressCancel' })
+        end
         return false
     end
 
@@ -166,35 +170,109 @@ function lib.progressBar(data)
     while progress ~= nil do Wait(0) end
 
     if not interruptProgress(data) then
-        SendNUIMessage({
-            action = 'progress',
-            data = {
-                label = data.label,
-                duration = data.duration
-            }
-        })
+        if useLation then
+            playerState.invBusy = true
+            progress = data
+            local anim = data.anim
 
-        return startProgress(data)
+            if anim then
+                if anim.dict then
+                    lib.requestAnimDict(anim.dict)
+                    TaskPlayAnim(cache.ped, anim.dict, anim.clip, anim.blendIn or 3.0, anim.blendOut or 1.0, anim.duration or -1, anim.flag or 49, anim.playbackRate or 0,
+                        anim.lockX, anim.lockY, anim.lockZ)
+                    RemoveAnimDict(anim.dict)
+                elseif anim.scenario then
+                    TaskStartScenarioInPlace(cache.ped, anim.scenario, 0, anim.playEnter == nil or anim.playEnter --[[@as boolean]])
+                end
+            end
+
+            if data.prop then
+                playerState:set('lib:progressProps', data.prop, true)
+            end
+
+            CreateThread(function()
+                local disable = data.disable
+                while progress do
+                    if disable then
+                        if disable.mouse then
+                            DisableControlAction(0, controls.INPUT_LOOK_LR, true)
+                            DisableControlAction(0, controls.INPUT_LOOK_UD, true)
+                            DisableControlAction(0, controls.INPUT_VEH_MOUSE_CONTROL_OVERRIDE, true)
+                        end
+
+                        if disable.move then
+                            DisableControlAction(0, controls.INPUT_SPRINT, true)
+                            DisableControlAction(0, controls.INPUT_MOVE_LR, true)
+                            DisableControlAction(0, controls.INPUT_MOVE_UD, true)
+                            DisableControlAction(0, controls.INPUT_DUCK, true)
+                        end
+
+                        if disable.sprint and not disable.move then
+                            DisableControlAction(0, controls.INPUT_SPRINT, true)
+                        end
+
+                        if disable.car then
+                            DisableControlAction(0, controls.INPUT_VEH_MOVE_LEFT_ONLY, true)
+                            DisableControlAction(0, controls.INPUT_VEH_MOVE_RIGHT_ONLY, true)
+                            DisableControlAction(0, controls.INPUT_VEH_ACCELERATE, true)
+                            DisableControlAction(0, controls.INPUT_VEH_BRAKE, true)
+                            DisableControlAction(0, controls.INPUT_VEH_EXIT, true)
+                        end
+
+                        if disable.combat then
+                            DisableControlAction(0, controls.INPUT_AIM, true)
+                            DisablePlayerFiring(cache.playerId, true)
+                        end
+                    end
+
+                    if interruptProgress(progress) then
+                        progress = false
+                        exports.lation_ui:cancelProgress()
+                    end
+
+                    Wait(0)
+                end
+            end)
+
+            local success = exports.lation_ui:progressBar({
+                label = data.label,
+                duration = data.duration,
+                icon = data.icon or 'fas fa-circle-notch',
+				iconAnimation = data.iconAnimation or 'spin',
+                iconColor = data.iconColor or '#fd7e14',
+                color = data.color or '#fd7e14',
+                steps = data.steps or nil
+            })
+
+            if data.prop then
+                playerState:set('lib:progressProps', nil, true)
+            end
+
+            if anim then
+                if anim.dict then
+                    StopAnimTask(cache.ped, anim.dict, anim.clip, 1.0)
+                    Wait(0)
+                else
+                    ClearPedTasks(cache.ped)
+                end
+            end
+
+            playerState.invBusy = false
+            progress = nil
+
+            return success
+        else
+            return startProgress(data)
+        end
     end
+
+    return false
 end
 
 ---@param data ProgressProps
 ---@return boolean?
 function lib.progressCircle(data)
-    while progress ~= nil do Wait(0) end
-
-    if not interruptProgress(data) then
-        SendNUIMessage({
-            action = 'circleProgress',
-            data = {
-                duration = data.duration,
-                position = data.position,
-                label = data.label
-            }
-        })
-
-        return startProgress(data)
-    end
+    return lib.progressBar(data)
 end
 
 function lib.cancelProgress()
@@ -202,18 +280,28 @@ function lib.cancelProgress()
         error('No progress bar is active')
     end
 
+    if useLation then
+        exports.lation_ui:cancelProgress()
+    end
+    
     progress = false
 end
 
 ---@return boolean
 function lib.progressActive()
-    return progress and true
+    if useLation then
+        return exports.lation_ui:progressActive()
+    else
+        return progress and true
+    end
 end
 
-RegisterNUICallback('progressComplete', function(data, cb)
-    cb(1)
-    progress = nil
-end)
+if not useLation then
+    RegisterNUICallback('progressComplete', function(data, cb)
+        cb(1)
+        progress = nil
+    end)
+end
 
 RegisterCommand('cancelprogress', function()
     if progress?.canCancel then progress = false end
